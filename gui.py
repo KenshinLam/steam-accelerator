@@ -1,325 +1,260 @@
 import tkinter as tk
-from tkinter import ttk, scrolledtext
-import json
+from tkinter import ttk, messagebox
 import threading
-import time
 import logging
-from src.route_optimizer import RouteOptimizer
+import json
+import os
+from pathlib import Path
+from src.core import AcceleratorCore
 
-class AcceleratorGUI:
+class MainWindow:
     def __init__(self, root):
         self.root = root
         self.root.title("游戏加速器")
-        self.root.geometry("800x600")
+        self.root.geometry("400x600")
+        self.root.resizable(False, False)
         
-        # 设置样式
-        style = ttk.Style()
-        style.configure("Accent.TButton", font=('微软雅黑', 10, 'bold'))
-        style.configure("Status.TLabel", font=('微软雅黑', 9))
+        # 初始化加速器核心
+        try:
+            self.core = AcceleratorCore()
+            logging.info("加速器核心初始化成功")
+        except Exception as e:
+            logging.error(f"加速器核心初始化失败: {str(e)}")
+            messagebox.showerror("错误", "加速器初始化失败，请检查配置文件")
+            self.root.destroy()
+            return
         
-        self.optimizer = RouteOptimizer()
-        self.monitoring = False
-        self.current_server = None
-        self.original_latency = None
+        # 状态变量
+        self.is_accelerating = False
+        self.status_timer = None
+        self.acceleration_thread = None
         
         self._init_ui()
-        self._load_config()
+        logging.info("GUI初始化完成")
         
     def _init_ui(self):
-        # 主框架
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky="nsew")
+        """初始化界面"""
+        # 游戏选择区域
+        game_frame = ttk.LabelFrame(self.root, text="选择游戏", padding=10)
+        game_frame.pack(fill=tk.X, padx=20, pady=5)
         
-        # 配置网格
-        self.root.grid_rowconfigure(0, weight=1)
-        self.root.grid_columnconfigure(0, weight=1)
-        main_frame.grid_columnconfigure(1, weight=1)
+        self.game_var = tk.StringVar(value="DotA2")
+        games = [("DotA2", "DotA2"), ("CS2", "CS2")]
+        for game, value in games:
+            ttk.Radiobutton(game_frame, text=game, value=value, 
+                          variable=self.game_var).pack(side=tk.LEFT, padx=20)
         
-        # 左侧控制面板
-        control_frame = ttk.LabelFrame(main_frame, text="控制面板", padding="5")
-        control_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        # 区服选择区域
+        region_frame = ttk.LabelFrame(self.root, text="选择区服", padding=10)
+        region_frame.pack(fill=tk.X, padx=20, pady=5)
         
-        # 游戏选择
-        ttk.Label(control_frame, text="游戏:").grid(row=0, column=0, sticky="w", pady=2)
-        self.game_var = tk.StringVar()
-        self.game_combo = ttk.Combobox(control_frame, textvariable=self.game_var, state="readonly")
-        self.game_combo.grid(row=0, column=1, sticky="ew", pady=2)
+        self.region_var = tk.StringVar(value="国服")
+        regions = [("国服", "国服"), ("香港", "香港"), ("东南亚", "东南亚")]
+        for region, value in regions:
+            ttk.Radiobutton(region_frame, text=region, value=value,
+                          variable=self.region_var).pack(side=tk.LEFT, padx=10)
         
-        # 区域选择
-        ttk.Label(control_frame, text="区域:").grid(row=1, column=0, sticky="w", pady=2)
-        self.region_var = tk.StringVar()
-        self.region_combo = ttk.Combobox(control_frame, textvariable=self.region_var, state="readonly")
-        self.region_combo.grid(row=1, column=1, sticky="ew", pady=2)
+        # 状态显示区域
+        status_frame = ttk.LabelFrame(self.root, text="加速状态", padding=10)
+        status_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
         
-        # 操作按钮
-        btn_frame = ttk.Frame(control_frame)
-        btn_frame.grid(row=2, column=0, columnspan=2, pady=10)
+        self.status_text = tk.Text(status_frame, height=15, width=40, font=("微软雅黑", 9))
+        self.status_text.pack(fill=tk.BOTH, expand=True)
         
-        self.test_btn = ttk.Button(btn_frame, text="测试延迟", command=self.test_latency, style="Accent.TButton")
-        self.test_btn.grid(row=0, column=0, padx=5)
+        # 添加滚动条
+        scrollbar = ttk.Scrollbar(status_frame, orient=tk.VERTICAL, 
+                                command=self.status_text.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.status_text.configure(yscrollcommand=scrollbar.set)
         
-        self.accelerate_btn = ttk.Button(btn_frame, text="开始加速", command=self.start_acceleration, style="Accent.TButton")
-        self.accelerate_btn.grid(row=0, column=1, padx=5)
+        # 控制按钮
+        self.control_btn = ttk.Button(self.root, text="开始加速", 
+                                    command=self._toggle_acceleration)
+        self.control_btn.pack(pady=20)
         
-        # 右侧状态面板
-        status_frame = ttk.LabelFrame(main_frame, text="状态监控", padding="5")
-        status_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        # 底部状态栏
+        self.status_bar = ttk.Label(self.root, text="就绪")
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=5)
         
-        # 延迟显示
-        latency_frame = ttk.Frame(status_frame)
-        latency_frame.grid(row=0, column=0, sticky="ew", pady=5)
-        latency_frame.grid_columnconfigure(1, weight=1)
+        # 绑定窗口关闭事件
+        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
         
-        ttk.Label(latency_frame, text="当前状态:", style="Status.TLabel").grid(row=0, column=0, sticky="w")
-        self.status_label = ttk.Label(latency_frame, text="未加速", style="Status.TLabel")
-        self.status_label.grid(row=0, column=1, sticky="w", padx=5)
-        
-        ttk.Label(latency_frame, text="原始延迟:", style="Status.TLabel").grid(row=1, column=0, sticky="w")
-        self.original_latency_label = ttk.Label(latency_frame, text="--", style="Status.TLabel")
-        self.original_latency_label.grid(row=1, column=1, sticky="w", padx=5)
-        
-        ttk.Label(latency_frame, text="优化延迟:", style="Status.TLabel").grid(row=2, column=0, sticky="w")
-        self.optimized_latency_label = ttk.Label(latency_frame, text="--", style="Status.TLabel")
-        self.optimized_latency_label.grid(row=2, column=1, sticky="w", padx=5)
-        
-        ttk.Label(latency_frame, text="延迟改善:", style="Status.TLabel").grid(row=3, column=0, sticky="w")
-        self.latency_improvement_label = ttk.Label(latency_frame, text="--", style="Status.TLabel")
-        self.latency_improvement_label.grid(row=3, column=1, sticky="w", padx=5)
-        
-        # 服务器信息
-        server_frame = ttk.LabelFrame(status_frame, text="服务器信息", padding="5")
-        server_frame.grid(row=1, column=0, sticky="ew", pady=5)
-        server_frame.grid_columnconfigure(1, weight=1)
-        
-        ttk.Label(server_frame, text="游戏服务器:", style="Status.TLabel").grid(row=0, column=0, sticky="w")
-        self.server_label = ttk.Label(server_frame, text="--", style="Status.TLabel")
-        self.server_label.grid(row=0, column=1, sticky="w", padx=5)
-        
-        ttk.Label(server_frame, text="加速节点:", style="Status.TLabel").grid(row=1, column=0, sticky="w")
-        self.node_label = ttk.Label(server_frame, text="--", style="Status.TLabel")
-        self.node_label.grid(row=1, column=1, sticky="w", padx=5)
-        
-        # 日志区域
-        log_frame = ttk.LabelFrame(main_frame, text="运行日志", padding="5")
-        log_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
-        
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=10)
-        self.log_text.grid(row=0, column=0, sticky="nsew")
-        
-        # 配置日志处理器
-        log_handler = logging.StreamHandler(self.LogRedirector(self.log_text))
-        log_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        logging.getLogger().addHandler(log_handler)
-        logging.getLogger().setLevel(logging.INFO)
-        
-        # 设置网格权重
-        main_frame.grid_rowconfigure(1, weight=1)
-        log_frame.grid_rowconfigure(0, weight=1)
-        log_frame.grid_columnconfigure(0, weight=1)
-        
-    def _load_config(self):
-        try:
-            with open('config.json', 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                
-            games = list(config.get('game_servers', {}).keys())
-            self.game_combo['values'] = games
-            if games:
-                self.game_combo.set(games[0])
-                
-            regions = list(config.get('nodes', {}).keys())
-            self.region_combo['values'] = regions
-            if regions:
-                self.region_combo.set(regions[0])
-                
-        except Exception as e:
-            logging.error(f"加载配置失败: {str(e)}")
-            
-    def test_latency(self):
-        """测试服务器延迟"""
-        self.test_btn.configure(state="disabled")
-        threading.Thread(target=self._test_latency_thread, daemon=True).start()
-        
-    def _test_latency_thread(self):
-        try:
-            game = self.game_var.get()
-            region = self.region_var.get()
-            
-            if not game or not region:
-                logging.error("请选择游戏和区域")
-                return
-                
-            logging.info(f"开始测试 {game} {region} 服务器延迟...")
-            
-            # 获取服务器列表
-            servers = self.optimizer.get_servers_for_game(game, region)
-            if not servers:
-                logging.error("未找到服务器")
-                return
-                
-            logging.info(f"找到 {len(servers)} 个服务器:")
-            
-            # 测试服务器延迟
-            best_server = None
-            best_latency = 999.0
-            
-            for server in servers:
-                latency = self.optimizer.test_latency(server)
-                logging.info(f"服务器 {server} 延迟: {latency}ms")
-                
-                if latency < best_latency:
-                    best_server = server
-                    best_latency = latency
-                    
-            if best_server:
-                self.current_server = best_server
-                self.original_latency = best_latency
-                self.original_latency_label.configure(text=f"{best_latency:.1f}ms")
-                self.server_label.configure(text=best_server)
-                
-            # 获取加速节点
-            nodes = self.optimizer.get_nodes_for_region(region)
-            if not nodes:
-                logging.error("未找到加速节点")
-                return
-                
-            logging.info(f"\n找到 {len(nodes)} 个加速节点:")
-            
-            # 测试节点延迟
-            for node in nodes:
-                latency = self.optimizer.test_latency(node)
-                logging.info(f"节点 {node} 延迟: {latency}ms")
-                
-            logging.info("\n延迟测试完成")
-            
-        except Exception as e:
-            logging.error(f"测试延迟失败: {str(e)}")
-        finally:
-            self.test_btn.configure(state="normal")
-            
-    def start_acceleration(self):
-        """开始加速"""
-        if not self.current_server:
-            logging.error("请先测试延迟")
-            return
-            
-        # 禁用按钮，避免重复点击
-        self.accelerate_btn.configure(state="disabled")
-        self.test_btn.configure(state="disabled")
-        
-        # 在后台线程中执行优化
-        threading.Thread(target=self._acceleration_thread, daemon=True).start()
-        
-    def _acceleration_thread(self):
-        """后台执行加速优化"""
-        try:
-            game = self.game_var.get()
-            region = self.region_var.get()
-            
-            logging.info(f"开始为 {game} {region} 优化路由...")
-            
-            # 开始优化
-            if self.optimizer.optimize_route(self.current_server, region):
-                self.monitoring = True
-                
-                # 更新UI状态
-                self.root.after(0, lambda: self._update_ui_state(True))
-                
-                # 启动延迟监控
-                threading.Thread(target=self._monitor_latency, daemon=True).start()
-            else:
-                logging.info("\n未能优化任何服务器的路由")
-                # 恢复UI状态
-                self.root.after(0, lambda: self._update_ui_state(False))
-                
-        except Exception as e:
-            logging.error(f"开始加速失败: {str(e)}")
-            # 恢复UI状态
-            self.root.after(0, lambda: self._update_ui_state(False))
-            
-    def _update_ui_state(self, is_accelerating):
-        """更新UI状态"""
-        if is_accelerating:
-            self.accelerate_btn.configure(text="停止加速", state="normal")
-            self.status_label.configure(text="加速中")
+    def _toggle_acceleration(self):
+        """切换加速状态"""
+        logging.info(f"切换加速状态: 当前状态={self.is_accelerating}")
+        if not self.is_accelerating:
+            self._start_acceleration()
         else:
-            self.accelerate_btn.configure(text="开始加速", state="normal")
-            self.test_btn.configure(state="normal")
-            self.status_label.configure(text="未加速")
-            self.optimized_latency_label.configure(text="--")
-            self.latency_improvement_label.configure(text="--")
-            self.node_label.configure(text="--")
+            self._stop_acceleration()
             
-    def stop_acceleration(self):
-        """停止加速"""
-        # 禁用按钮，避免重复点击
-        self.accelerate_btn.configure(state="disabled")
-        
-        # 在后台线程中执行停止
-        threading.Thread(target=self._stop_acceleration_thread, daemon=True).start()
-        
-    def _stop_acceleration_thread(self):
-        """后台执行停止加速"""
+    def _start_acceleration(self):
+        """启动加速"""
         try:
-            logging.info("\n正在停止路由优化...")
-            
-            if self.current_server:
-                self.optimizer.remove_route(self.current_server)
+            # 防止重复点击
+            if self.acceleration_thread and self.acceleration_thread.is_alive():
+                logging.warning("加速线程已在运行中")
+                return
                 
-            self.monitoring = False
+            # 禁用按钮，更新状态
+            self.control_btn.configure(state=tk.DISABLED)
+            self.status_bar.configure(text="正在启动加速...")
+            self.status_text.delete(1.0, tk.END)
+            self.status_text.insert(tk.END, "正在测试线路...\n")
             
-            # 恢复UI状态
-            self.root.after(0, lambda: self._update_ui_state(False))
+            game = self.game_var.get()
+            region = self.region_var.get()
+            logging.info(f"开始加速: 游戏={game}, 区服={region}")
             
-            logging.info("路由优化已停止")
+            # 立即更新界面，提供视觉反馈
+            self.root.update_idletasks()
             
+            def start():
+                try:
+                    if self.core.start_acceleration(game, region):
+                        logging.info("加速启动成功")
+                        self.root.after(0, self._acceleration_started)
+                    else:
+                        logging.error("加速启动失败")
+                        self.root.after(0, self._acceleration_failed)
+                except Exception as e:
+                    logging.error(f"加速线程出错: {str(e)}")
+                    self.root.after(0, self._acceleration_failed)
+                finally:
+                    self.root.after(0, lambda: self.control_btn.configure(state=tk.NORMAL))
+                    
+            self.acceleration_thread = threading.Thread(target=start, daemon=True)
+            self.acceleration_thread.start()
+            logging.info("加速线程已启动")
+            
+            # 添加额外的状态更新
+            self.status_text.insert(tk.END, "加速线程已启动，正在测试网络...\n")
+            self.root.update_idletasks()
+            
+        except Exception as e:
+            logging.error(f"启动加速失败: {str(e)}")
+            messagebox.showerror("错误", f"启动加速失败: {str(e)}")
+            self.control_btn.configure(state=tk.NORMAL)
+            
+    def _acceleration_started(self):
+        """加速启动成功"""
+        self.is_accelerating = True
+        self.control_btn.configure(text="停止加速", state=tk.NORMAL)
+        self.status_bar.configure(text="加速运行中")
+        self._update_status()
+        logging.info("加速状态更新已启动")
+        
+    def _acceleration_failed(self):
+        """加速启动失败"""
+        self.is_accelerating = False
+        self.control_btn.configure(text="开始加速", state=tk.NORMAL)
+        self.status_bar.configure(text="加速启动失败")
+        self.status_text.delete(1.0, tk.END)
+        self.status_text.insert(tk.END, "加速启动失败，请检查以下问题：\n\n")
+        self.status_text.insert(tk.END, "1. 是否以管理员权限运行\n")
+        self.status_text.insert(tk.END, "2. 网络连接是否正常\n")
+        self.status_text.insert(tk.END, "3. 防火墙是否允许程序联网\n\n")
+        self.status_text.insert(tk.END, "请查看日志获取详细信息\n\n")
+        self.status_text.insert(tk.END, "注意：如果点击按钮后界面没有反应，可能是因为加速进程正在后台运行，\n")
+        self.status_text.insert(tk.END, "请等待几秒钟，如果状态没有更新，请再次点击按钮。")
+        messagebox.showerror("错误", "加速启动失败，请查看日志获取详细信息")
+        # 确保界面更新
+        self.root.update_idletasks()
+        
+    def _stop_acceleration(self):
+        """停止加速"""
+        try:
+            logging.info("正在停止加速...")
+            self.is_accelerating = False
+            self.core.stop_acceleration()
+            
+            # 更新UI
+            self.control_btn.configure(text="开始加速")
+            self.status_bar.configure(text="就绪")
+            self.status_text.delete(1.0, tk.END)
+            self.status_text.insert(tk.END, "加速已停止\n")
+            
+            # 取消状态更新
+            if self.status_timer:
+                self.root.after_cancel(self.status_timer)
+                self.status_timer = None
+                
+            logging.info("加速已停止")
+                
         except Exception as e:
             logging.error(f"停止加速失败: {str(e)}")
-            # 恢复UI状态
-            self.root.after(0, lambda: self._update_ui_state(False))
+            messagebox.showerror("错误", f"停止加速失败: {str(e)}")
             
-    def _monitor_latency(self):
-        """监控延迟变化"""
-        while self.monitoring:
-            try:
-                if self.current_server:
-                    # 测试当前延迟
-                    current_latency = self.optimizer.test_latency(self.current_server)
-                    
-                    # 更新UI
-                    self.optimized_latency_label.configure(text=f"{current_latency:.1f}ms")
-                    
-                    if self.original_latency:
-                        improvement = self.original_latency - current_latency
-                        self.latency_improvement_label.configure(
-                            text=f"{improvement:.1f}ms ({improvement/self.original_latency*100:.1f}%)"
+    def _update_status(self):
+        """更新状态显示"""
+        try:
+            if not self.is_accelerating:
+                return
+                
+            status = self.core.get_status()
+            self.status_text.delete(1.0, tk.END)
+            
+            if status["routes"]:
+                total_improvement = 0
+                route_count = 0
+                
+                for server, route in status["routes"].items():
+                    if "original_latency" in route and "current_latency" in route:
+                        original = route["original_latency"]
+                        current = route["current_latency"]
+                        improvement = ((original - current) / original * 100 
+                                    if original > 0 else 0)
+                        
+                        self.status_text.insert(tk.END, 
+                            f"服务器: {server}\n"
+                            f"加速线路: {route.get('node', '无')}\n"
+                            f"原始延迟: {original:.0f}ms\n"
+                            f"当前延迟: {current:.0f}ms\n"
+                            f"优化效果: {improvement:+.1f}%\n\n"
                         )
                         
-                    # 获取当前使用的节点
-                    if self.current_server in self.optimizer.routes:
-                        route_info = self.optimizer.routes[self.current_server]
-                        self.node_label.configure(text=route_info['node'])
+                        total_improvement += improvement
+                        route_count += 1
                         
-            except Exception as e:
-                logging.error(f"监控延迟失败: {str(e)}")
-                
-            time.sleep(1)  # 每秒更新一次
+                if route_count > 0:
+                    avg_improvement = total_improvement / route_count
+                    self.status_text.insert(tk.END, 
+                        f"平均优化效果: {avg_improvement:+.1f}%\n")
+                    
+                    # 更新状态栏
+                    self.status_bar.configure(
+                        text=f"加速中 - 平均优化: {avg_improvement:+.1f}%")
             
-    class LogRedirector:
-        def __init__(self, text_widget):
-            self.text_widget = text_widget
+            # 设置下一次更新
+            self.status_timer = self.root.after(1000, self._update_status)
             
-        def write(self, message):
-            self.text_widget.insert(tk.END, message)
-            self.text_widget.see(tk.END)
+        except Exception as e:
+            logging.error(f"更新状态失败: {str(e)}")
+            self.status_timer = self.root.after(5000, self._update_status)
             
-        def flush(self):
-            pass
+    def _on_closing(self):
+        """处理窗口关闭事件"""
+        try:
+            if self.is_accelerating:
+                if messagebox.askokcancel("确认", "加速正在运行中，确定要退出吗？"):
+                    self._stop_acceleration()
+                    self.root.destroy()
+            else:
+                self.root.destroy()
+        except:
+            self.root.destroy()
+            
+    def run(self):
+        """运行主窗口"""
+        self.root.mainloop()
+        
+        # 确保程序退出时停止加速
+        if self.is_accelerating:
+            self.core.stop_acceleration()
 
 def main():
     root = tk.Tk()
-    app = AcceleratorGUI(root)
-    root.mainloop()
+    app = MainWindow(root)
+    app.run()
 
 if __name__ == "__main__":
     main()

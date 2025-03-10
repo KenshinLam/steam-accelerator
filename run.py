@@ -1,71 +1,130 @@
-import sys
-import os
-import ctypes
-import logging
-from datetime import datetime
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
-def setup_logging():
-    """设置日志记录"""
-    log_dir = "logs"
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-        
-    log_file = os.path.join(log_dir, f"accelerator_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler()
-        ]
-    )
+import logging
+import os
+import sys
+import ctypes
+import traceback
+from pathlib import Path
+import tkinter as tk
 
 def is_admin():
     """检查是否具有管理员权限"""
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
-    except Exception as e:
-        logging.error(f"检查管理员权限时出错: {str(e)}")
+    except:
         return False
 
-if __name__ == '__main__':
+def request_admin():
+    """请求管理员权限"""
     try:
-        setup_logging()
-        print("程序启动...")
         if not is_admin():
-            print("尝试获取管理员权限...")
-            # 如果不是管理员，则使用管理员权限重新运行
-            try:
-                ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
-            except Exception as e:
-                logging.error(f"请求管理员权限失败: {str(e)}")
-                print("\n错误：无法获取管理员权限。请右键点击程序，选择\"以管理员身份运行\"。")
-                input("\n按回车键退出...")
-        else:
-            logging.info("已获得管理员权限")
-            # 添加src目录到Python路径
-            src_path = os.path.join(os.path.dirname(__file__), 'src')
-            sys.path.append(src_path)
-            logging.debug(f"Python路径: {sys.path}")
-            logging.debug(f"当前目录: {os.getcwd()}")
+            # 使用绝对路径
+            python_exe = sys.executable
+            script = os.path.abspath(__file__)
+            args = ' '.join(sys.argv[1:])
             
-            try:
-                # 导入并运行主程序
-                logging.info("正在导入主程序...")
-                from main import main
-                logging.info("正在启动主界面...")
-                main()
-            except ImportError as e:
-                logging.error(f"导入主程序失败: {str(e)}")
-                print("\n错误：无法加载主程序。请确保程序文件完整。")
-                print(f"详细错误: {str(e)}")
-            except Exception as e:
-                logging.error(f"启动主程序时出错: {str(e)}")
-                print("\n错误：程序启动失败。")
-                print(f"详细错误: {str(e)}")
+            logging.warning("需要管理员权限，正在请求...")
+            
+            # 使用runas命令提升权限
+            ret = ctypes.windll.shell32.ShellExecuteW(
+                None, 
+                "runas",
+                python_exe,
+                f'"{script}" {args}',
+                None,
+                1  # SW_SHOWNORMAL
+            )
+            
+            # ShellExecuteW返回值大于32表示成功
+            if ret <= 32:
+                raise RuntimeError(f"请求管理员权限失败，错误码: {ret}")
                 
+            sys.exit(0)  # 退出当前进程
+    except Exception as e:
+        logging.error(f"请求管理员权限时出错: {str(e)}")
+        traceback.print_exc()
+        sys.exit(1)
+
+def setup_environment():
+    """设置运行环境"""
+    # 设置工作目录
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    
+    # 配置日志
+    log_file = 'accelerator.log'
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler()
+        ]
+    )
+    
+    # 清理旧的日志文件
+    try:
+        if os.path.exists(log_file) and os.path.getsize(log_file) > 10 * 1024 * 1024:  # 10MB
+            os.remove(log_file)
+    except:
+        pass
+
+def main():
+    """主程序入口"""
+    try:
+        # 检查管理员权限
+        if not is_admin():
+            request_admin()
+            return
+            
+        # 设置环境
+        setup_environment()
+        
+        # 导入GUI模块
+        try:
+            # 尝试从src.gui导入AcceleratorGUI
+            from src.gui import AcceleratorGUI
+            
+            # 创建主窗口
+            root = tk.Tk()
+            app = AcceleratorGUI(root)
+            
+            # 设置窗口标题和图标
+            root.title("游戏加速器")
+            try:
+                root.iconbitmap("assets/icon.ico")
+            except:
+                pass
+                
+            # 运行主循环
+            root.mainloop()
+            
+        except ImportError as e:
+            logging.error(f"导入GUI模块失败: {str(e)}")
+            logging.info("尝试使用备用GUI模块...")
+            
+            # 尝试使用备用GUI类
+            from gui import MainWindow
+            
+            # 创建主窗口
+            root = tk.Tk()
+            app = MainWindow(root)
+            
+            # 设置窗口标题和图标
+            root.title("游戏加速器")
+            try:
+                root.iconbitmap("assets/icon.ico")
+            except:
+                pass
+                
+            # 运行主循环
+            root.mainloop()
+        
     except Exception as e:
         logging.error(f"程序运行出错: {str(e)}")
-        print(f"\n发生未知错误: {str(e)}")
-    finally:
-        input("\n按回车键退出...")
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
