@@ -6,11 +6,12 @@ import json
 import os
 from pathlib import Path
 from src.core import AcceleratorCore
+from src.version import get_version, get_version_info
 
 class MainWindow:
     def __init__(self, root):
         self.root = root
-        self.root.title("游戏加速器")
+        self.root.title(f"游戏加速器 v{get_version()}")
         self.root.geometry("400x600")
         self.root.resizable(False, False)
         
