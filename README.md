@@ -1,8 +1,12 @@
-# Steam游戏加速器
+# Steam游戏加速器 | Steam Game Accelerator
+
+[简体中文](README_zh.md) | [English](README_en.md)
 
 一款专为Steam平台游戏（如DOTA2、CS2）设计的网络加速工具，通过智能路由优化和节点选择，有效降低游戏延迟，提升游戏体验。
 
-## 功能特点
+A network acceleration tool designed specifically for Steam platform games (such as DOTA2, CS2), effectively reducing game latency and enhancing gaming experience through intelligent route optimization and node selection.
+
+## 功能特点 | Features
 
 - **多区服支持**：支持国服、香港、东南亚等多个游戏服务器区域
 - **智能节点选择**：自动测试并选择最佳加速节点
@@ -10,107 +14,19 @@
 - **自动游戏检测**：能够自动检测正在运行的Steam游戏
 - **用户友好界面**：简洁直观的操作界面
 
-## 系统要求
+## 详细文档 | Detailed Documentation
 
-- **操作系统**：Windows 10/11
-- **运行环境**：Python 3.8+
-- **权限要求**：管理员权限（用于修改系统路由）
-- **依赖组件**：详见requirements.txt
+请选择您的语言查看详细文档：
+Please select your language to view detailed documentation:
 
-## 安装步骤
+- [简体中文](README_zh.md)
+- [English](README_en.md)
 
-1. 克隆仓库：
-```bash
-git clone https://github.com/your-username/steam-accelerator.git
-cd steam-accelerator
-```
+## 版本信息 | Version
 
-2. 安装依赖：
-```bash
-pip install -r requirements.txt
-```
+当前版本 | Current version: 1.0.1
 
-## 使用方法
+## 许可证 | License
 
-### 方法一：直接运行
-
-1. 以管理员身份运行：
-```bash
-python gui.py
-```
-
-2. 在界面上选择游戏和区服
-3. 点击"开始加速"按钮
-4. 查看实时加速状态和优化效果
-
-### 方法二：使用批处理文件
-
-直接双击运行`启动加速器.bat`文件（需要管理员权限）
-
-## 技术架构
-
-### 核心组件
-
-1. **加速器核心(AcceleratorCore)**
-   - 负责路由优化和节点管理
-   - 提供延迟测试功能
-   - 管理加速会话
-
-2. **游戏检测器(GameDetector)**
-   - 检测正在运行的游戏
-   - 智能判断游戏区域
-   - 获取游戏服务器信息
-
-3. **用户界面(UI)**
-   - 提供图形化操作界面
-   - 显示加速状态和延迟信息
-   - 支持游戏和区服选择
-
-### 工作原理
-
-1. **节点质量评估**
-   - 测试节点到本地的延迟
-   - 评估节点到游戏服务器的连通性
-   - 综合计算节点得分(0-100)
-
-2. **路由优化**
-   - 修改系统路由表
-   - 为游戏服务器IP设置最优路径
-   - 定期更新路由以保持最佳性能
-
-## 配置说明
-
-在`config.json`中可以配置：
-
-1. **节点配置**
-   - 按区域和运营商分类的加速节点
-   - 每个节点包含IP、位置和ISP信息
-
-2. **游戏服务器配置**
-   - 不同游戏的服务器IP列表
-   - 按区域分类的服务器组
-
-## 项目结构
-
-```
-steam_accelerator/
-├── gui.py              # 主界面入口
-├── src/
-│   ├── core.py         # 加速器核心
-│   ├── game_detector.py # 游戏检测
-│   ├── ui.py           # 用户界面
-│   └── main.py         # 主程序
-├── config.json         # 配置文件
-├── requirements.txt    # 依赖列表
-└── 启动加速器.bat       # 快速启动脚本
-```
-
-## 注意事项
-
-- 需要管理员权限才能正常运行
-- 使用前请确保已安装所有依赖
-- 如遇问题，请查看日志获取详细信息
-
-## License
-
-[MIT License](LICENSE)
+本项目采用MIT许可证，详情请参阅LICENSE文件。
+This project is licensed under the MIT License - see the LICENSE file for details.
